@@ -136,15 +136,16 @@ func (state inSession) handleSequenceReset(session *session, msg *Message) (next
 
 	var newSeqNo FIXInt
 	if err := msg.Body.GetField(tagNewSeqNo, &newSeqNo); err == nil {
-		expectedSeqNum := FIXInt(session.store.NextTargetMsgSeqNum())
+		expectedSeqNum := session.store.NextTargetMsgSeqNum()
+		newSeqNoInt := int(newSeqNo)
 		session.log.OnEventf("Received SequenceReset FROM: %v TO: %v", expectedSeqNum, newSeqNo)
 
 		switch {
-		case newSeqNo > expectedSeqNum:
-			if err := session.store.SetNextTargetMsgSeqNum(int(newSeqNo)); err != nil {
+		case newSeqNoInt > expectedSeqNum:
+			if err := session.store.SetNextTargetMsgSeqNum(newSeqNoInt); err != nil {
 				return handleStateError(session, err)
 			}
-		case newSeqNo < expectedSeqNum:
+		case newSeqNoInt < expectedSeqNum:
 			//FIXME: to be compliant with legacy tests, do not include tag in reftagid? (11c_NewSeqNoLess)
 			if err := session.doReject(msg, valueIsIncorrectNoTag()); err != nil {
 				return handleStateError(session, err)

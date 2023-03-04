@@ -246,10 +246,18 @@ func validateVisitGroupField(fieldDef *datadictionary.FieldDef, fieldStack []Tag
 
 		// Group complete.
 		if len(childDefs) == 0 {
-			break
+			if len(fieldStack) > 0 {
+				childDefs = fieldDef.Fields
+				fieldStack = fieldStack[1:]
+				continue
+			} else {
+				// we hit the end of the fieldstack and the end of the childdefs.
+				break
+			}
 		}
 
 		if int(fieldStack[0].tag) == childDefs[0].Tag() {
+			// child tag found in order. validating that tag
 			var err MessageRejectError
 			if fieldStack, err = validateVisitField(childDefs[0], fieldStack); err != nil {
 				return fieldStack, err
@@ -258,6 +266,8 @@ func validateVisitGroupField(fieldDef *datadictionary.FieldDef, fieldStack []Tag
 			if childDefs[0].Required() {
 				return fieldStack, RequiredTagMissing(Tag(childDefs[0].Tag()))
 			}
+
+			// didn't match an optional field. continuing through the list of child defs
 		}
 
 		childDefs = childDefs[1:]

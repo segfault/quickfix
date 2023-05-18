@@ -104,9 +104,6 @@ type Message struct {
 
 	// Field bytes as they appear in the raw message.
 	fields []TagValue
-
-	// Flag is true if this message should not be returned to pool after use.
-	keepMessage bool
 }
 
 // ToMessage returns the message itself.
@@ -272,7 +269,6 @@ func ParseMessageWithDataDictionary(
 	}
 
 	return
-
 }
 
 func isHeaderField(tag Tag, dataDict *datadictionary.DataDictionary) bool {
@@ -388,6 +384,14 @@ func extractField(parsedFieldBytes *TagValue, buffer []byte) (remBytes []byte, e
 
 	err = parsedFieldBytes.parse(buffer[:endIndex+1])
 	return buffer[(endIndex + 1):], err
+}
+
+func (m *Message) Bytes() []byte {
+	if m.rawMessage != nil {
+		return m.rawMessage.Bytes()
+	}
+
+	return m.build()
 }
 
 func (m *Message) String() string {

@@ -410,9 +410,12 @@ func validateField(d *datadictionary.DataDictionary,
 		fallthrough
 	case "LOCALMKTDATE", "DATE":
 		fallthrough
+	case "LOCALMKTTIME":
 	case "EXCHANGE":
 		fallthrough
 	case "LANGUAGE":
+		fallthrough
+	case "TENOR":
 		fallthrough
 	case "XMLDATA":
 		fallthrough
@@ -439,6 +442,8 @@ func validateField(d *datadictionary.DataDictionary,
 	case "NUMINGROUP":
 		fallthrough
 	case "SEQNUM":
+		fallthrough
+	case "TAGNUM":
 		fallthrough
 	case "INT":
 		prototype = new(FIXInt)

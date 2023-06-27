@@ -203,9 +203,13 @@ func quickfixType(field *datadictionary.FieldType) (quickfixType string, err err
 		fallthrough
 	case "LOCALMKTDATE":
 		fallthrough
+	case "LOCALMKTTIME":
+		fallthrough
 	case "TIME":
 		fallthrough
 	case "DATE":
+		fallthrough
+	case "TENOR":
 		fallthrough
 	case "EXCHANGE":
 		fallthrough
@@ -238,6 +242,8 @@ func quickfixType(field *datadictionary.FieldType) (quickfixType string, err err
 	case "NUMINGROUP":
 		fallthrough
 	case "SEQNUM":
+		fallthrough
+	case "TAGNUM":
 		fallthrough
 	case "INT":
 		quickfixType = "FIXInt"

@@ -369,6 +369,7 @@ func validateField(d *datadictionary.DataDictionary, validFields datadictionary.
 	case "LOCALMKTDATE", "DATE":
 		fallthrough
 	case "LOCALMKTTIME":
+		fallthrough
 	case "EXCHANGE":
 		fallthrough
 	case "LANGUAGE":
@@ -421,7 +422,6 @@ func validateField(d *datadictionary.DataDictionary, validFields datadictionary.
 		fallthrough
 	case "FLOAT":
 		prototype = new(FIXFloat)
-
 	}
 
 	if err := prototype.Read(field.value); err != nil {

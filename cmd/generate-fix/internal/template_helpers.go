@@ -3,8 +3,21 @@ package internal
 import (
 	"fmt"
 
+	"github.com/iancoleman/strcase"
 	"github.com/quickfixgo/quickfix/datadictionary"
 )
+
+func init() {
+	strcase.ConfigureAcronym("FX", "FX")
+	strcase.ConfigureAcronym("FXSwap", "FXSwap")
+	strcase.ConfigureAcronym("FXSwaption", "FXSwaption")
+	strcase.ConfigureAcronym("FXOnShore", "FXOnShore")
+	strcase.ConfigureAcronym("FXBank", "FXBank")
+	strcase.ConfigureAcronym("FXSpot", "FXSpot")
+	strcase.ConfigureAcronym("FXOption", "FXOption")
+	strcase.ConfigureAcronym("FXForward", "FXForward")
+	strcase.ConfigureAcronym("FXNonDeliverableForward", "FXNonDeliverableForward")
+}
 
 func checkIfDecimalImportRequiredForFields(fTypes []*datadictionary.FieldType) (ok bool, err error) {
 	var t string
@@ -185,6 +198,11 @@ func quickfixValueType(quickfixType string) (goType string, err error) {
 	}
 
 	return
+}
+
+func enumNameString(f *datadictionary.FieldType, en datadictionary.Enum) string {
+	baseName := fmt.Sprintf("%s_%s", f.Name(), strcase.ToCamel(en.Description))
+	return baseName
 }
 
 func quickfixType(field *datadictionary.FieldType) (quickfixType string, err error) {

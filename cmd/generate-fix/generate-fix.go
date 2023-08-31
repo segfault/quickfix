@@ -53,6 +53,36 @@ type component struct {
 	*datadictionary.MessageDef
 }
 
+func (c component) ContextForSelf() templateContext {
+	return templateContext{
+		Component:     &c,
+		MsgKey:        fmt.Sprintf("%s/%s/%s/%s[%s]", c.Package, c.FIXPackage, c.TransportPackage, c.MessageDef.Name, c.MessageDef.MsgType),
+		CurrentTarget: c,
+	}
+}
+
+func (c component) ContextFor(target interface{}) templateContext {
+	return templateContext{
+		Component:     &c,
+		MsgKey:        fmt.Sprintf("%s/%s/%s/%s[%s]", c.Package, c.FIXPackage, c.TransportPackage, c.MessageDef.Name, c.MessageDef.MsgType),
+		CurrentTarget: target,
+	}
+}
+
+type templateContext struct {
+	Component     *component
+	MsgKey        string
+	CurrentTarget interface{}
+}
+
+func (c templateContext) ContextFor(target interface{}) templateContext {
+	return templateContext{
+		Component:     c.Component,
+		MsgKey:        c.MsgKey,
+		CurrentTarget: target,
+	}
+}
+
 func genHeader(pkg string, spec *datadictionary.DataDictionary) {
 	c := component{
 		Package:    pkg,
@@ -133,17 +163,29 @@ func main() {
 			args = append(args, strings.Replace(dictpath, "FIX50", "FIXT11", -1))
 		}
 	}
+	specDict := make(map[string]*datadictionary.DataDictionary)
 	specs := []*datadictionary.DataDictionary{}
 
 	for _, dataDictPath := range args {
+		fmt.Printf("Processing file %s\n", dataDictPath)
 		spec, err := datadictionary.Parse(dataDictPath)
 		if err != nil {
-			log.Fatalf("Error Parsing %v: %v", dataDictPath, err)
+			log.Fatalf("Error Parsing %s: %v", dataDictPath, err)
 		}
-		specs = append(specs, spec)
+		specPkg := getPackageName(spec)
+		fmt.Printf("Identified file %s as spec %s\n", dataDictPath, specPkg)
+		if existingSpec, alreadyExists := specDict[specPkg]; alreadyExists {
+			fmt.Printf("Merging exising spec for %s %p -> %p\n", specPkg, spec, existingSpec)
+			existingSpec.Merge(spec)
+		} else {
+			fmt.Printf("Adding new spec for %s %p\n", specPkg, spec)
+			specDict[specPkg] = spec
+			specs = append(specs, spec)
+		}
 	}
 
 	internal.BuildGlobalFieldTypes(specs)
+	internal.ClearGlobalFieldUsage()
 
 	waitGroup.Add(1)
 	go genTags()

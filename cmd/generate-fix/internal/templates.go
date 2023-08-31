@@ -17,6 +17,7 @@ var (
 func init() {
 	tmplFuncs := template.FuncMap{
 		"toLower":                               strings.ToLower,
+		"toEnumName":                            enumNameString,
 		"requiredFields":                        requiredFields,
 		"beginString":                           beginString,
 		"routerBeginString":                     routerBeginString,
@@ -28,6 +29,7 @@ func init() {
 		"checkIfDecimalImportRequiredForFields": checkIfDecimalImportRequiredForFields,
 		"checkIfTimeImportRequiredForFields":    checkIfTimeImportRequiredForFields,
 		"checkIfEnumImportRequired":             checkIfEnumImportRequired,
+		"isFieldUsageOk":                        isFieldUsageOk,
 	}
 
 	baseTemplate := template.Must(template.New("Base").Funcs(tmplFuncs).Parse(`
@@ -57,10 +59,11 @@ Set{{ .Name }}(f {{ .Name }}RepeatingGroup){
 {{- end }}
 
 {{ define "setters" }}
+{{ with .CurrentTarget }}
 {{ range .Fields }}
 // Set{{ .Name }} sets {{ .Name }}, Tag {{ .Tag }}.
-func ({{ template "receiver" }} {{ $.Name }}) {{ if .IsGroup }}{{ template "groupsetter" . }}{{ else }}{{ template "fieldsetter" . }}{{ end }}
-{{ end }}{{ end }}
+func ({{ template "receiver" }} {{ $.CurrentTarget.Name }}) {{ if .IsGroup }}{{ template "groupsetter" . }}{{ else }}{{ template "fieldsetter" . }}{{ end }}
+{{ end }}{{ end }}{{ end }}
 
 {{ define "fieldgetter" -}}
 Get{{ .Name }}() (f field.{{ .Name }}Field, err quickfix.MessageRejectError) {
@@ -97,18 +100,20 @@ Get{{ .Name }}() ({{ .Name }}RepeatingGroup, quickfix.MessageRejectError) {
 
 
 {{ define "getters" }}
+{{ with .CurrentTarget }}
 {{ range .Fields }}
 // Get{{ .Name }} gets {{ .Name }}, Tag {{ .Tag }}.
-func ({{ template "receiver" }} {{ $.Name }}) {{if .IsGroup}}{{ template "groupgetter" . }}{{ else }}{{ template "fieldvaluegetter" .}}{{ end }}
-{{ end }}{{ end }}
+func ({{ template "receiver" }} {{ $.CurrentTarget.Name }}) {{if .IsGroup}}{{ template "groupgetter" . }}{{ else }}{{ template "fieldvaluegetter" .}}{{ end }}
+{{ end }}{{ end }}{{ end }}
 
 {{ define "hasers" }}
+{{ with .CurrentTarget }}
 {{range .Fields}}
 // Has{{ .Name}} returns true if {{ .Name}} is present, Tag {{ .Tag}}.
-func ({{ template "receiver" }} {{ $.Name }}) Has{{ .Name}}() bool {
+func ({{ template "receiver" }} {{ $.CurrentTarget.Name }}) Has{{ .Name}}() bool {
 	return {{ template "receiver" }}.Has(tag.{{ .Name}})
 }
-{{end}}{{ end }}
+{{end}}{{end}}{{ end }}
 
 {{ define "group_template" }}
 quickfix.GroupTemplate{
@@ -120,17 +125,21 @@ quickfix.GroupTemplate{
 {{- end }}
 
 {{ define "groups" }}
-{{ range .Fields }}
+{{ $ctx := . }}
+// Groups section template in base template from {{ .CurrentTarget.Name }}
+{{ range .CurrentTarget.Fields }}
+{{ if isFieldUsageOk $ctx.MsgKey . }}
 {{ if .IsGroup }}
 // {{ .Name }} is a repeating group element, Tag {{ .Tag }}.
 type {{ .Name }} struct {
 	*quickfix.Group
 }
 
-{{ template "setters" .}}
-{{ template "getters" . }}
-{{ template "hasers" . }}
-{{ template "groups" . }}
+{{ $subctx := $ctx.ContextFor . }}
+{{ template "setters" $subctx }}
+{{ template "getters" $subctx }}
+{{ template "hasers" $subctx }}
+{{ template "groups" $subctx }}
 
 // {{ .Name }}RepeatingGroup is a repeating group, Tag {{ .Tag }}.
 type {{ .Name }}RepeatingGroup struct {
@@ -154,7 +163,7 @@ func ({{ template "receiver" }} {{ .Name}}RepeatingGroup) Get(i int) {{ .Name }}
 	return {{ .Name }}{ {{ template "receiver" }}.RepeatingGroup.Get(i) }
 }
 
-{{ end }}{{ end }}{{ end }}
+{{ end }}{{ end }}{{ end }}{{ end }}
 `))
 
 	HeaderTemplate = template.Must(template.Must(baseTemplate.Clone()).Parse(`
@@ -187,10 +196,11 @@ func NewHeader(header *quickfix.Header) (h Header) {
 	return
 }
 
-{{ template "setters" .}}
-{{ template "getters" . }}
-{{ template "hasers" . }}
-{{ template "groups" . }}
+{{ $target := .ContextForSelf }}
+{{ template "setters" $target }}
+{{ template "getters" $target }}
+{{ template "hasers" $target }}
+{{ template "groups" $target }}
 	`))
 
 	TrailerTemplate = template.Must(template.Must(baseTemplate.Clone()).Parse(`
@@ -215,10 +225,11 @@ type Trailer struct {
 	*quickfix.Trailer
 }
 
-{{ template "setters" .}}
-{{ template "getters" . }}
-{{ template "hasers" . }}
-{{ template "groups" . }}
+{{ $target := .ContextForSelf }}
+{{ template "setters" $target }}
+{{ template "getters" $target }}
+{{ template "hasers" $target }}
+{{ template "groups" $target }}
 `))
 
 	MessageTemplate = template.Must(baseTemplate.Parse(`
@@ -289,10 +300,21 @@ func Route(router RouteOut) (string, string, quickfix.MessageRoute) {
 	return "{{ routerBeginString .FIXSpec }}", "{{ .MessageDef.MsgType }}", r
 }
 
-{{ template "setters" . }}
-{{ template "getters" . }}
-{{ template "hasers" . }}
-{{ template "groups" . }}
+{{ $target := .ContextForSelf }}
+// Msg Template start
+
+// Msg Setters template
+{{ template "setters" $target }}
+
+// Msg Getters template
+{{ template "getters" $target }}
+
+// Msg Hasers template
+{{ template "hasers" $target }}
+
+// Msg Groups template
+{{ template "groups" $target }}
+// Msg Template end
 	`))
 
 	TagTemplate = template.Must(template.New("Tag").Parse(`
@@ -383,7 +405,7 @@ func (f {{ .Name }}Field) Value() ({{ quickfixValueType $base_type }}) {
 {{ end }}{{ end }}{{ end }}
 `))
 
-	EnumTemplate = template.Must(template.New("Enum").Parse(`
+	EnumTemplate = template.Must(template.New("Enum").Funcs(tmplFuncs).Parse(`
 package enum
 {{ range $ft := . }}
 {{ if $ft.Enums }}
@@ -391,7 +413,7 @@ package enum
 type {{ $ft.Name }} string
 const(
 {{ range $ft.Enums }}
-{{ $ft.Name }}_{{ .Description }} {{ $ft.Name }} = "{{ .Value }}"
+{{ toEnumName $ft . }} {{ $ft.Name }} = "{{ .Value }}"
 {{- end }}
 )
 {{ end }}{{ end }}

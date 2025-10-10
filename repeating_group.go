@@ -197,10 +197,37 @@ func (f *RepeatingGroup) Read(tv []TagValue) ([]TagValue, error) {
 	tagOrdering := f.groupTagOrder()
 	group := new(Group)
 	group.initWithOrdering(tagOrdering)
+	groupInstanceCount := 0
+
 	for len(tv) > 0 {
-		gi, ok := f.findItemInGroupTemplate(tv[0].tag)
-		if !ok {
+		currentTag := tv[0].tag
+
+		// Check if we've finished all groups and are seeing the delimiter again
+		// This means we've entered a sibling repeating group in a different parent context
+		if groupInstanceCount >= expectedGroupSize && f.isDelimiter(currentTag) {
 			break
+		}
+
+		gi, ok := f.findItemInGroupTemplate(currentTag)
+
+		if !ok {
+			// Tag not in template - check if we've parsed more than enough groups
+			if groupInstanceCount > expectedGroupSize {
+				break
+			}
+			// Otherwise, store this unknown tag in the current group and continue parsing
+
+			// Store the unknown field in the group so it's accessible later
+			tvRange := tv
+			tv = tv[1:]
+
+			if group != nil {
+				group.rwLock.Lock()
+				group.tagLookup[currentTag] = tvRange
+				group.tags = append(group.tags, currentTag)
+				group.rwLock.Unlock()
+			}
+			continue
 		}
 
 		tvRange := tv
@@ -211,8 +238,8 @@ func (f *RepeatingGroup) Read(tv []TagValue) ([]TagValue, error) {
 		if f.isDelimiter(gi.Tag()) {
 			group = new(Group)
 			group.initWithOrdering(tagOrdering)
-
 			f.groups = append(f.groups, group)
+			groupInstanceCount++
 		}
 
 		group.rwLock.Lock()

@@ -16,6 +16,8 @@
 package quickfix
 
 import (
+	"fmt"
+
 	"github.com/quickfixgo/quickfix/datadictionary"
 )
 
@@ -233,52 +235,57 @@ func validateVisitGroupField(fieldDef *datadictionary.FieldDef, fieldStack []Tag
 		return nil, IncorrectDataFormatForValue(numInGroupTag)
 	}
 
+	// Consume the NumInGroup field from the stack before processing group instances
 	fieldStack = fieldStack[1:]
-
-	var childDefs []*datadictionary.FieldDef
 	groupCount := 0
 
-	for len(fieldStack) > 0 {
+	// Loop exactly NumInGroup times
+	for i := 0; i < int(numInGroup); i++ {
+		childDefs := fieldDef.Fields
+		processedTags := make(map[int]bool)
 
-		// Start of repeating group.
-		if int(fieldStack[0].tag) == fieldDef.Fields[0].Tag() {
-			childDefs = fieldDef.Fields
-			groupCount++
-		}
+		// Process fields for this group instance until we hit a field not in this group
+		for len(fieldStack) > 0 {
+			currentTag := int(fieldStack[0].tag)
 
-		// Group complete.
-		if len(childDefs) == 0 {
-			if len(fieldStack) > 0 {
-				childDefs = fieldDef.Fields
-				fieldStack = fieldStack[1:]
-				continue
+			// Check if current field belongs to any of the child defs
+			matchedIdx := -1
+			for idx, def := range childDefs {
+				if def.Tag() == currentTag && !processedTags[currentTag] {
+					matchedIdx = idx
+					break
+				}
+			}
+
+			if matchedIdx >= 0 {
+				// Found a match - consume this field
+				var err MessageRejectError
+				fieldStack, err = validateVisitField(childDefs[matchedIdx], fieldStack)
+				if err != nil {
+					return fieldStack, err
+				}
+				processedTags[currentTag] = true
 			} else {
-				// we hit the end of the fieldstack and the end of the childdefs.
+				// Current field doesn't match any child def - we've reached the end of this group instance
 				break
 			}
 		}
 
-		if int(fieldStack[0].tag) == childDefs[0].Tag() {
-			// child tag found in order. validating that tag
-			var err MessageRejectError
-			if fieldStack, err = validateVisitField(childDefs[0], fieldStack); err != nil {
-				return fieldStack, err
+		// Check if all required fields were present
+		for _, def := range childDefs {
+			if def.Required() && !processedTags[def.Tag()] {
+				return fieldStack, RequiredTagMissing(Tag(def.Tag()))
 			}
-		} else {
-			if childDefs[0].Required() {
-				return fieldStack, RequiredTagMissing(Tag(childDefs[0].Tag()))
-			}
-
-			// didn't match an optional field. continuing through the list of child defs
 		}
 
-		childDefs = childDefs[1:]
+		groupCount++
 	}
 
 	if groupCount != int(numInGroup) {
 		return fieldStack, incorrectNumInGroupCountForRepeatingGroup(numInGroupTag)
 	}
 
+	// After processing all group instances, fieldStack may contain remaining fields outside the group
 	return fieldStack, nil
 }
 

@@ -16,8 +16,6 @@
 package quickfix
 
 import (
-	"fmt"
-
 	"github.com/quickfixgo/quickfix/datadictionary"
 )
 

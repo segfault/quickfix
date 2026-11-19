@@ -310,9 +310,11 @@ func parseGroup(mp *msgParser, tags []Tag) {
 	dm := mp.msg.fields[mp.fieldIndex : mp.fieldIndex+1]
 	fields := getGroupFields(mp.msg, tags, mp.appDataDictionary)
 
+parseLoop:
 	for {
 		mp.fieldIndex++
 		mp.parsedFieldBytes = &mp.msg.fields[mp.fieldIndex]
+		preExtractBytes := mp.rawBytes
 		mp.rawBytes, _ = extractField(mp.parsedFieldBytes, mp.rawBytes)
 		mp.trailerBytes = mp.rawBytes
 
@@ -337,6 +339,10 @@ func parseGroup(mp *msgParser, tags []Tag) {
 			mp.msg.Body.add(dm)
 			mp.msg.Trailer.add(mp.msg.fields[mp.fieldIndex : mp.fieldIndex+1])
 			mp.foundTrailer = true
+			// Restore the buffer that still holds the trailer so the caller strips
+			// it from bodyBytes; otherwise the trailer stays embedded and resend
+			// emits a duplicate 10= tag.
+			mp.trailerBytes = preExtractBytes
 			break
 		} else {
 			// Found a body field outside the group.
@@ -350,16 +356,15 @@ func parseGroup(mp *msgParser, tags []Tag) {
 				fields = getGroupFields(mp.msg, searchTags, mp.appDataDictionary)
 				continue
 			}
-			if len(tags) > 1 {
-				searchTags = tags[:len(tags)-1]
-			}
-			// Did this tag occur after a nested group and belongs to the parent group.
-			if isNumInGroupField(mp.msg, searchTags, mp.appDataDictionary) {
-				// Add the field member to the group.
-				dm = append(dm, *mp.parsedFieldBytes)
-				// Continue parsing the parent group.
-				fields = getGroupFields(mp.msg, searchTags, mp.appDataDictionary)
-				continue
+			// The tag isn't a member of the current group. Walk up: if an
+			// ancestor group includes it, resume there; otherwise it's body-level.
+			for len(tags) > 1 {
+				tags = tags[:len(tags)-1]
+				fields = getGroupFields(mp.msg, tags, mp.appDataDictionary)
+				if isGroupMember(mp.parsedFieldBytes.tag, fields) {
+					dm = append(dm, *mp.parsedFieldBytes)
+					continue parseLoop
+				}
 			}
 			// Add the repeating group.
 			mp.msg.Body.add(dm)
@@ -588,7 +593,7 @@ func formatCheckSum(value int) string {
 
 // Build constructs a []byte from a Message instance.
 func (m *Message) build() []byte {
-	m.cook()
+	m.cook(m.Body.length(), m.Body.total())
 
 	var b bytes.Buffer
 	m.Header.write(&b)
@@ -603,7 +608,7 @@ func (m *Message) build() []byte {
 // This func lets us pull the Message from the Store, parse it, update the Header, and then build it back into bytes using the original Body.
 // Note: The only standard non-Body group is NoHops.  If that is used in the Header, this workaround may fail.
 func (m *Message) buildWithBodyBytes(bodyBytes []byte) []byte {
-	m.cook()
+	m.cook(len(bodyBytes), bytesTotal(bodyBytes))
 
 	var b bytes.Buffer
 	m.Header.write(&b)
@@ -612,9 +617,9 @@ func (m *Message) buildWithBodyBytes(bodyBytes []byte) []byte {
 	return b.Bytes()
 }
 
-func (m *Message) cook() {
-	bodyLength := m.Header.length() + m.Body.length() + m.Trailer.length()
+func (m *Message) cook(bodyLen, bodyTotal int) {
+	bodyLength := m.Header.length() + bodyLen + m.Trailer.length()
 	m.Header.SetInt(tagBodyLength, bodyLength)
-	checkSum := (m.Header.total() + m.Body.total() + m.Trailer.total()) % 256
+	checkSum := (m.Header.total() + bodyTotal + m.Trailer.total()) % 256
 	m.Trailer.SetString(tagCheckSum, formatCheckSum(checkSum))
 }

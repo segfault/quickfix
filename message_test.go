@@ -113,6 +113,45 @@ func (s *MessageSuite) TestParseOutOfOrder() {
 	s.Nil(ParseMessage(s.msg, rawMsg))
 }
 
+func (s *MessageSuite) TestParseGroup_BodyFieldAfterNestedGroup() {
+	dict, dictErr := datadictionary.Parse("spec/FIX44.xml")
+	s.Nil(dictErr)
+
+	// Wire layout (FIX 4.4 MassQuoteAcknowledgement):
+	//   117=QID              QuoteID (body)
+	//   296=1                NoQuoteSets count (body group)
+	//     302=SET1           QuoteSetID (inside NoQuoteSets)
+	//     295=1              NoQuoteEntries count (nested group)
+	//       299=E1           QuoteEntryID (inside NoQuoteEntries)
+	//       132=100          BidPx (inside NoQuoteEntries)
+	//       133=101          OfferPx (inside NoQuoteEntries)
+	//   297=0                QuoteStatus (BODY level, AFTER the group)
+	rawMsg := bytes.NewBufferString(
+		"8=FIX.4.49=6335=b117=QID" +
+			"296=1302=SET1" +
+			"295=1299=E1132=100133=101" +
+			"297=1" +
+			"10=002")
+
+	err := ParseMessageWithDataDictionary(s.msg, rawMsg, dict, dict)
+	s.Nil(err)
+
+	rebuildBytes := s.msg.build()
+	expectedBytes := rawMsg.Bytes()
+	s.True(bytes.Equal(expectedBytes, rebuildBytes), "Unexpected bytes,\n +%s\n -%s", rebuildBytes, expectedBytes)
+
+	// NoQuoteSets count (group delimiter) lands in Body as expected.
+	s.True(s.msg.Body.Has(Tag(296)))
+
+	// QuoteStatus (297) must be a top-level body field per FIX 4.4.
+	s.True(s.msg.Body.Has(Tag(297)),
+		"QuoteStatus (297) must land at the body level; it is a body field "+
+			"in MassQuoteAcknowledgement, not a member of NoQuoteSets.")
+	val, verr := s.msg.Body.GetInt(Tag(297))
+	s.Nil(verr)
+	s.Equal(1, val)
+}
+
 func (s *MessageSuite) TestBuild() {
 	s.msg.Header.SetField(tagBeginString, FIXString(BeginStringFIX44))
 	s.msg.Header.SetField(tagMsgType, FIXString("A"))
@@ -416,6 +455,56 @@ func (s *MessageSuite) TestReBuildWithRepeatingGroupForResend() {
 
 	// Then the reparsed, rebuilt message will retain the correct ordering of repeating group tags during resend
 	s.True(bytes.Equal(expectedBytes, resendBytes), "Unexpected bytes,\n expected: %s\n  but was: %s", expectedBytes, resendBytes)
+}
+
+func (s *MessageSuite) TestReBuildWithRepeatingGroupMultipleEntriesInGroupForResend() {
+	// Given the following message with a repeating group that has 2 entries
+	origHeader := "8=FIXT.1.19=18435=834=349=ISLD52=20240415-03:43:17.92356=TW"
+	origBody := "6=1.0011=114=1.0017=131=1.0032=1.0037=138=1.0039=254=155=1150=2151=0.00453=2448=xyzzy447=D452=1448=foobar447=D452=3"
+	origTrailer := "10=152"
+	rawMsg := bytes.NewBufferString(origHeader + origBody + origTrailer)
+
+	// When I reparse the message from the store during a resend request
+	s.Nil(ParseMessage(s.msg, rawMsg))
+
+	// And I update the headers for resend
+	s.msg.Header.SetField(tagOrigSendingTime, FIXString("20240415-03:43:17.923"))
+	s.msg.Header.SetField(tagSendingTime, FIXString("20240415-14:41:23.456"))
+	s.msg.Header.SetField(tagPossDupFlag, FIXBoolean(true))
+
+	// The bodyBytes will still be correct
+	origBodyBytes := []byte(origBody)
+	s.True(bytes.Equal(origBodyBytes, s.msg.bodyBytes), "Incorrect body bytes, \n expected: %s\n  but was: %s", origBodyBytes, s.msg.bodyBytes)
+
+	// So when I combine the updated header + the original bodyBytes + the as-is trailer
+	resendBytes := s.msg.buildWithBodyBytes(origBodyBytes)
+
+	// Then the reparsed, rebuilt message will retain the correct ordering of repeating group tags during resend
+	expectedResendHeader := "8=FIXT.1.19=21535=834=343=Y49=ISLD52=20240415-14:41:23.45656=TW122=20240415-03:43:17.923"
+	expectedResendBody := "6=1.0011=114=1.0017=131=1.0032=1.0037=138=1.0039=254=155=1150=2151=0.00453=2448=xyzzy447=D452=1448=foobar447=D452=3"
+	expectedResendTrailer := "10=147"
+	expectedResendBytes := []byte(expectedResendHeader + expectedResendBody + expectedResendTrailer)
+	s.True(bytes.Equal(expectedResendBytes, resendBytes), "Unexpected bytes,\n expected: %s\n  but was: %s", expectedResendBytes, resendBytes)
+}
+
+func (s *MessageSuite) TestReBuildWithRepeatingGroupWithDictionaryForResend() {
+	dict, dictErr := datadictionary.Parse("spec/FIX44.xml")
+	s.Nil(dictErr)
+
+	// A message whose body ends in a repeating group (453), parsed WITH a
+	// dictionary so parseGroup handles the group.
+	rawMsg := bytes.NewBufferString(
+		"8=FIX.4.4\x019=165\x0135=D\x0134=2\x0149=01001\x0150=01001a\x0152=20231231-20:19:41\x0156=TEST\x01" +
+			"1=acct1\x0111=13976\x0121=1\x0138=1\x0140=2\x0144=12\x0154=1\x0155=SYMABC\x0159=0\x0160=20231231-20:19:41\x01453=1\x01448=4501\x01447=D\x01452=28\x01" +
+			"10=026\x01")
+	s.Nil(ParseMessageWithDataDictionary(s.msg, rawMsg, dict, dict))
+
+	// The trailer must not stay embedded in bodyBytes.
+	s.False(bytes.Contains(s.msg.bodyBytes, []byte("\x0110=")), "trailer leaked into bodyBytes: %s", s.msg.bodyBytes)
+
+	// A resend rebuilt from bodyBytes must carry exactly one 10= checksum.
+	resendBytes := s.msg.buildWithBodyBytes(s.msg.bodyBytes)
+	s.Equal(1, bytes.Count(resendBytes, []byte("\x0110=")), "expected exactly one 10= checksum, got: %s", resendBytes)
 }
 
 func (s *MessageSuite) TestReverseRoute() {
